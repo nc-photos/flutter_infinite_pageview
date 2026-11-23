@@ -1,9 +1,14 @@
 part of 'infinite_pageview.dart';
 
+const _hiddenTolerance = 0.01;
+
 class _InfinitePageViewState extends State<InfinitePageView> {
   double _lastReportedPage = 0;
 
   late InfiniteScrollController _controller;
+
+  /// Whether page 0 is completely out of view on the negative side
+  final _isFirstPageHidden = ValueNotifier(false);
 
   @override
   void initState() {
@@ -13,25 +18,48 @@ class _InfinitePageViewState extends State<InfinitePageView> {
 
   @override
   void dispose() {
+    _controller.removeListener(_updateFirstPageHidden);
     if (widget.controller == null) {
       _controller.dispose();
     }
+    _isFirstPageHidden.dispose();
     super.dispose();
   }
 
   void _initController() {
     _controller = widget.controller ?? InfiniteScrollController();
+    _controller.addListener(_updateFirstPageHidden);
   }
 
   @override
   void didUpdateWidget(InfinitePageView oldWidget) {
     if (oldWidget.controller != widget.controller) {
+      _controller.removeListener(_updateFirstPageHidden);
       if (oldWidget.controller == null) {
         _controller.dispose();
       }
       _initController();
     }
     super.didUpdateWidget(oldWidget);
+  }
+
+  /// The positive viewport always lays out its first child, even when it is
+  /// scrolled to a negative offset. Hide page 0 then, otherwise it stays alive
+  /// off screen (e.g. a video keeps playing).
+  void _updateFirstPageHidden() {
+    if (!_controller.hasClients) {
+      return;
+    }
+    final position = _controller.position;
+    if (!position.hasPixels || !position.hasViewportDimension) {
+      return;
+    }
+    final viewport = position.viewportDimension;
+    final leadingPadding = widget.padEnds
+        ? viewport * (1 - _controller.viewportFraction) / 2
+        : 0.0;
+    _isFirstPageHidden.value =
+        position.pixels + viewport <= leadingPadding + _hiddenTolerance;
   }
 
   AxisDirection _getDirection(BuildContext context) {
@@ -167,7 +195,14 @@ class _InfinitePageViewState extends State<InfinitePageView> {
 
   SliverChildDelegate get positiveChildrenDelegate {
     return SliverChildBuilderDelegate(
-      widget.itemBuilder,
+      (context, index) => index != 0
+          ? widget.itemBuilder(context, index)
+          : ValueListenableBuilder<bool>(
+              valueListenable: _isFirstPageHidden,
+              builder: (context, isHidden, _) => isHidden
+                  ? const SizedBox.shrink()
+                  : widget.itemBuilder(context, 0),
+            ),
       childCount: widget.itemCount,
       addAutomaticKeepAlives: widget.addAutomaticKeepAlives,
       addRepaintBoundaries: widget.addRepaintBoundaries,
